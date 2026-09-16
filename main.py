@@ -12,13 +12,18 @@ import pyarrow.parquet as pq
 from shapely.geometry import box, mapping
 import pystac
 
+COLLECTION_ID = "TerraMind-Sentinel-2-tokenizer-embeddings"
+
 
 def process_directory(args):
     """
     Worker function to process a single directory of GeoTIFFs.
     Returns a dictionary of metadata for STAC generation on success.
     """
-    input_dir, output_file = args
+    input_dir: str = args[0]
+    output_file: str = args[1]
+    stac_out_dir: str = args[2]
+    collection_id = args[3]
     item_id = os.path.basename(input_dir)
     records = []
     native_crs = None
@@ -54,10 +59,7 @@ def process_directory(args):
             gdf = gdf.to_crs("EPSG:4326")
 
         # 3. Define the nested FixedSizeList PyArrow type for (14, 14, 5)
-        type_inner = pa.fixed_size_list(pa.float32(), 5)
-        type_mid = pa.fixed_size_list(type_inner, 14)
-        type_outer = pa.fixed_size_list(type_mid, 14)
-
+        type_outer = pa.list_(pa.list_(pa.list_(pa.float32(), 5),14,),14)
         embedding_array = pa.array(gdf["embedding"], type=type_outer)
 
         # 4. Construct PyArrow Table
@@ -92,11 +94,50 @@ def process_directory(args):
         os.makedirs(os.path.dirname(output_file), exist_ok=True)
         pq.write_table(table, output_file)
 
+        # 7. Build STAC Item
+        stac_datetime = datetime.strptime(item_id.split("_")[2], "%Y%m%dT%H%M%S")
+
+        item = pystac.Item(
+            id=item_id,
+            geometry=mapping(box(*bbox)),
+            bbox=bbox,
+            datetime=stac_datetime,
+            properties={"proj:code": "EPSG:4326"},
+            collection=collection_id,
+            stac_extensions=["https://stac-extensions.github.io/projection/v2.0.0/schema.json"]
+        )
+
+        # Path relative to the final STAC directory
+        rel_path = os.path.relpath(output_file, stac_out_dir)
+
+        item.add_asset(
+            "embeddings",
+            pystac.Asset(
+                href=rel_path,
+                media_type="application/vnd.apache.parquet",
+                roles=["embeddings"],
+                title=f"TerraMind Embeddings",
+                description="The embeddings as geoparquet"
+            )
+        )
+
+        item.add_link(
+            pystac.Link(
+                "derived-from",
+                f"https://stac.dataspace.copernicus.eu/v1/collections/sentinel-2-l2a/items/{item_id}",
+                "application/json",
+                "Base Sentinel-2-L2A image",
+            )
+        )
+
+        item.save_object(False, f"{stac_out_dir}/{item_id}.json")
+
         return {
             "status": "success",
             "id": item_id,
             "parquet_path": output_file,
             "bbox": bbox,
+            "datetime": stac_datetime.isoformat(),
             "count": len(gdf)
         }
 
@@ -117,7 +158,7 @@ def process_and_catalog(parent_input_dir, parent_output_dir, stac_out_dir):
         if entry.is_dir():
             input_dir = entry.path
             output_file = os.path.join(parent_output_dir, f"{entry.name}.parquet")
-            tasks.append((input_dir, output_file))
+            tasks.append((input_dir, output_file, stac_out_dir, COLLECTION_ID))
 
     if not tasks:
         print(f"No subdirectories found in {parent_input_dir}")
@@ -143,38 +184,14 @@ def process_and_catalog(parent_input_dir, parent_output_dir, stac_out_dir):
 
     # 3. Build STAC Items
     print(f"Building STAC Catalog for {len(successful_results)} items...")
-    collection_time = datetime.now(timezone.utc)
-    stac_items = []
+
     all_bboxes = []
+    all_datetimes = []
 
     for res in successful_results:
         bbox = res["bbox"]
         all_bboxes.append(bbox)
-
-        # Geometry for the item is the bounding box of the parquet file
-        geom = mapping(box(*bbox))
-
-        item = pystac.Item(
-            id=res["id"],
-            geometry=geom,
-            bbox=bbox,
-            datetime=collection_time,
-            properties={"proj:epsg": 4326}
-        )
-
-        # Path relative to the final STAC directory
-        rel_path = os.path.relpath(res["parquet_path"], stac_out_dir)
-
-        item.add_asset(
-            "data",
-            pystac.Asset(
-                href=rel_path,
-                media_type="application/vnd.apache.parquet",
-                roles=["data"],
-                title=f"ViT Embeddings for {res['id']}"
-            )
-        )
-        stac_items.append(item)
+        all_datetimes.append(datetime.fromisoformat(res["datetime"]))
 
     # 4. Calculate overall Extents and build STAC Collection
     minx = min(b[0] for b in all_bboxes)
@@ -184,23 +201,47 @@ def process_and_catalog(parent_input_dir, parent_output_dir, stac_out_dir):
 
     spatial_extent = pystac.SpatialExtent(bboxes=[[minx, miny, maxx, maxy]])
     temporal_extent = pystac.TemporalExtent(
-        intervals=[[collection_time, collection_time]])
+        intervals=[[min(all_datetimes), max(all_datetimes)]])
     extent = pystac.Extent(spatial=spatial_extent, temporal=temporal_extent)
 
     collection = pystac.Collection(
-        id="vit-embeddings-collection",
-        title="Vision Transformer Embeddings",
-        description="A STAC Collection of GeoParquet files containing (14, 14, 5) dense embeddings.",
+        id=COLLECTION_ID,
+        title="Sentinel-2-L2A TerraMind embeddings",
+        description="A STAC Collection of Sentinel-2-L2A embeddings, produced with the TerraMind Tokenizer.",
+        stac_extensions=[
+            "https://stac-extensions.github.io/embeddings/v0.0.1/schema.json",
+            "https://stac-extensions.github.io/projection/v2.0.0/schema.json"
+        ],
         extent=extent,
-        license="proprietary"
+        license="CC-BY-4.0",
+        providers=[
+            pystac.Provider(
+                "Embed2Scale",
+                "EU Horizon Embed2Scale Project, GA Number 101131841",
+                [pystac.ProviderRole.PRODUCER, pystac.ProviderRole.PROCESSOR],
+                "https://embed2scale.eu")
+        ],
+        keywords=["terramind", "embeddings"],
+        extra_fields={
+            "data_type": "float32",
+            "emb:type": "patch",
+            "emb:dimensions": 5,
+            "emb:chip_layout": {"layout_type": "regular_grid"},
+            "proj:code": "EPSG:4326",
+        },
     )
 
-    for item in stac_items:
-        collection.add_item(item)
+    collection.item_assets = {
+        "embeddings": pystac.ItemAssetDefinition.create(
+            media_type="application/vnd.apache.parquet",
+            roles=["embeddings"],
+            title=f"TerraMind Embeddings",
+            description="The embeddings as geoparquet"
+        )
+    }
 
     # 5. Save STAC structure
-    collection.normalize_hrefs(stac_out_dir)
-    collection.save(catalog_type=pystac.CatalogType.SELF_CONTAINED)
+    collection.save_object(False, f"{stac_out_dir}/collection.json")
 
     print(f"Process complete. STAC Collection saved to {os.path.abspath(stac_out_dir)}")
 

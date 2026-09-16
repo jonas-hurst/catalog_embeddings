@@ -3,6 +3,7 @@ import glob
 import json
 import concurrent.futures
 from datetime import datetime, timezone
+import shutil
 
 import rasterio
 import numpy as np
@@ -20,55 +21,63 @@ def process_directory(args):
     Worker function to process a single directory of GeoTIFFs.
     Returns a dictionary of metadata for STAC generation on success.
     """
+
+    def embeddings_to_arrow(stacked: np.ndarray) -> pa.Array:
+        """stacked: (N, H, W, C) contiguous float32 -> FixedSizeList<FixedSizeList<FixedSizeList<float>>>"""
+        assert stacked.dtype == np.float32 and stacked.flags["C_CONTIGUOUS"]
+        n, h, w, c = stacked.shape
+
+        flat = pa.array(stacked.reshape(-1))  # zero-copy FloatArray
+        lvl_c = pa.FixedSizeListArray.from_arrays(flat, c)  # (N*H*W) lists of C
+        lvl_w = pa.FixedSizeListArray.from_arrays(lvl_c, w)  # (N*H)   lists of W
+        lvl_h = pa.FixedSizeListArray.from_arrays(lvl_w, h)  # (N)     lists of H
+        return lvl_h
+
+    # -------------------------------------------------------------------------------
+
     input_dir: str = args[0]
     output_file: str = args[1]
     stac_out_dir: str = args[2]
     collection_id = args[3]
     item_id = os.path.basename(input_dir)
-    records = []
-    native_crs = None
+    tif_files = sorted(glob.glob(os.path.join(input_dir, "*.tif")))
 
-    tif_files = glob.glob(os.path.join(input_dir, "*.tif"))
     if not tif_files:
         return {"status": "skipped", "message": f"No .tif files found in {input_dir}"}
 
+    ids, geoms = [], []
+    stacked = None
+    native_crs = None
+
     try:
         # 1. Read files and extract data
-        for f in tif_files:
+        for i, f in enumerate(tif_files):
             with rasterio.open(f) as src:
-                arr = src.read()
-                arr = np.transpose(arr, (1, 2, 0))  # (14, 14, 5)
-
-                geom = box(*src.bounds)
-
-                if native_crs is None:
+                a = src.read()  # (C, H, W)
+                if stacked is None:  # derive shape from the first file
+                    c, h, w = a.shape
+                    stacked = np.empty((len(tif_files), h, w, c), dtype=np.float32)
                     native_crs = src.crs
+                elif a.shape != (c, h, w):
+                    raise ValueError(f"{f}: shape {a.shape} != {(c, h, w)}")
+                elif src.crs != native_crs:
+                    raise ValueError(f"{f}: CRS {src.crs} != {native_crs}")
 
-                records.append({
-                    "ID": os.path.basename(f),
-                    "geometry": geom,
-                    "embedding": arr.tolist()
-                })
+                # single copy: transpose + cast written directly into the output buffer
+                stacked[i] = np.transpose(a, (1, 2, 0))
 
-        # 2. Initialize GeoDataFrame and reproject to EPSG:4326
-        gdf = gpd.GeoDataFrame(records, geometry="geometry", crs=native_crs)
+                ids.append(os.path.basename(f))
+                geoms.append(box(*src.bounds))
 
-        if gdf.crs is None:
-            gdf.set_crs("EPSG:4326", inplace=True)
-        else:
-            gdf = gdf.to_crs("EPSG:4326")
-
-        # 3. Define the nested FixedSizeList PyArrow type for (14, 14, 5)
-        type_outer = pa.list_(pa.list_(pa.list_(pa.float32(), 5),14,),14)
-        embedding_array = pa.array(gdf["embedding"], type=type_outer)
-
-        # 4. Construct PyArrow Table
-        wkb_geometry = pa.array(gdf.geometry.to_wkb())
-        id_array = pa.array(gdf["ID"], type=pa.string())
+        # geometry-only GeoDataFrame: the embeddings never need to go through pandas
+        gdf = gpd.GeoDataFrame({"ID": ids}, geometry=geoms, crs=native_crs)
+        gdf = gdf.to_crs("EPSG:4326") if gdf.crs else gdf.set_crs("EPSG:4326")
 
         table = pa.Table.from_arrays(
-            [id_array, wkb_geometry, embedding_array],
-            names=["ID", "geometry", "embedding"]
+            [pa.array(gdf["ID"], type=pa.string()),
+             pa.array(gdf.geometry.to_wkb()),
+             embeddings_to_arrow(stacked)],
+            names=["ID", "geometry", "embedding"],
         )
 
         # 5. Add standard GeoParquet Metadata
@@ -95,7 +104,7 @@ def process_directory(args):
         pq.write_table(table, output_file)
 
         # 7. Build STAC Item
-        stac_datetime = datetime.strptime(item_id.split("_")[2], "%Y%m%dT%H%M%S")
+        stac_datetime = datetime.strptime(item_id.split("_")[2], "%Y%m%dT%H%M%S").replace(tzinfo=timezone.utc)
 
         item = pystac.Item(
             id=item_id,
@@ -249,12 +258,17 @@ def process_and_catalog(parent_input_dir, parent_output_dir, stac_out_dir):
 if __name__ == "__main__":
     # --- Configuration ---
     # Directory containing subdirectories of TIFFs
-    RAW_DATA_DIR = "./data/raw_tiffs"
+    RAW_DATA_DIR = "~/e2s/maritime/03_interim_data/02_terramind_embeddings/02_S2_embeddings"
+
+    OUT_DIR = "~/e2s/maritime/99_preprocess"
 
     # Directory to store the output GeoParquet files
-    PARQUETS_DIR = "./data/processed_parquets"
+    PARQUETS_DIR = f"{OUT_DIR}/pq"
 
     # Directory to store the generated STAC Collection and Items
-    STAC_DIR = "./data/stac_catalog"
+    STAC_DIR = f"{OUT_DIR}/stac"
+
+    if os.path.exists(OUT_DIR):
+        shutil.rmtree(OUT_DIR)
 
     process_and_catalog(RAW_DATA_DIR, PARQUETS_DIR, STAC_DIR)

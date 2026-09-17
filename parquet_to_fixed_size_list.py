@@ -36,6 +36,12 @@ def is_var_list(t: pa.DataType) -> bool:
     return pa.types.is_list(t) or pa.types.is_large_list(t)
 
 
+def fixed_size_list(value_type, size: int) -> pa.DataType:
+    """pa.list_(value_type, N) is how you build a FixedSizeListType.
+    (There is no pa.fixed_size_list.) Accepts a DataType or a Field."""
+    return pa.list_(value_type, size)
+
+
 # --------------------------------------------------------------------------- #
 # 1. find candidate list paths in the schema
 # --------------------------------------------------------------------------- #
@@ -124,7 +130,7 @@ def _to_fixed_size_list(arr: pa.Array, size: int, path: str,
     # recurse (handles list<list<...>>)
     child = convert_array(child, path + ".list", sizes)
 
-    out_type = pa.fixed_size_list(child.type, size)
+    out_type = fixed_size_list(child.type, size)
     if valid.all() and size > 0:
         return pa.FixedSizeListArray.from_arrays(child, size)
 
@@ -169,7 +175,7 @@ def convert_array(arr, path: str, sizes: Dict[str, int]):
         if new_child.type == t.value_type:
             return arr
         vf = t.value_field
-        new_type = pa.fixed_size_list(
+        new_type = fixed_size_list(
             pa.field(vf.name, new_child.type, vf.nullable), t.list_size
         )
         return pa.Array.from_buffers(

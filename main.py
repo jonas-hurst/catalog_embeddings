@@ -42,7 +42,7 @@ def process_directory(args):
     item_id = os.path.basename(input_dir)
     if item_id.endswith(".SAFE"):
         item_id = item_id.strip(".SAFE")
-    tif_files = sorted(glob.glob(os.path.join(input_dir, "*.tif")))
+    tif_files = sorted(glob.glob(os.path.join(input_dir, "*_embedding.tif")))
 
     if not tif_files:
         return {"status": "skipped", "message": f"No .tif files found in {input_dir}"}

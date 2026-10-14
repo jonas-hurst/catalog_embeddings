@@ -8,5 +8,6 @@ dependencies = [
     "pyarrow>=25.0.1",
     "pystac>=1.15.2",
     "rasterio>=1.5.1",
+    "requests>=2.34.2",
     "shapely>=2.1.2",
 ]

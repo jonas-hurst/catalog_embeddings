@@ -14,8 +14,6 @@ import pyarrow.parquet as pq
 from shapely.geometry import box, mapping, Polygon
 import pystac
 
-COLLECTION_ID = "TerraMind-Sentinel-2-tokenizer-embeddings"
-
 
 def process_directory(args):
     """
@@ -40,7 +38,10 @@ def process_directory(args):
     output_file: str = args[1]
     stac_out_dir: str = args[2]
     collection_id = args[3]
+    px_scale_factor = args[4]
     item_id = os.path.basename(input_dir)
+    if item_id.endswith(".SAFE"):
+        item_id = item_id.strip(".SAFE")
     tif_files = sorted(glob.glob(os.path.join(input_dir, "*.tif")))
 
     if not tif_files:
@@ -68,7 +69,7 @@ def process_directory(args):
                 stacked[i] = np.transpose(a, (1, 2, 0))
 
                 # fix pixel size metadata and build footprint polygon
-                transform = src.transform * Affine.scale(16, 16)
+                transform = src.transform * Affine.scale(px_scale_factor, px_scale_factor)
                 width, height = src.width, src.height
                 footprint = Polygon([
                     transform * (0, 0),
@@ -115,7 +116,15 @@ def process_directory(args):
         pq.write_table(table, output_file)
 
         # 7. Build STAC Item
-        stac_datetime = datetime.strptime(item_id.split("_")[2], "%Y%m%dT%H%M%S").replace(tzinfo=timezone.utc)
+
+        if item_id.startswith("S2"):
+            source_url = "stac.dataspace.copernicus.eu/v1"
+            source_collection = "sentinel-2-l2a"
+            stac_datetime = datetime.strptime(item_id.split("_")[2], "%Y%m%dT%H%M%S").replace(tzinfo=timezone.utc)
+        else:
+            source_url = "stac.terrabyte.lrz.de/public/api"
+            source_collection = "sentinel-1-grd"
+            stac_datetime = datetime.strptime(item_id.split("_")[4], "%Y%m%dT%H%M%S").replace(tzinfo=timezone.utc)
 
         item = pystac.Item(
             id=item_id,
@@ -124,7 +133,10 @@ def process_directory(args):
             datetime=stac_datetime,
             properties={"proj:code": "EPSG:4326"},
             collection=collection_id,
-            stac_extensions=["https://stac-extensions.github.io/projection/v2.0.0/schema.json"]
+            stac_extensions=[
+                "https://stac-extensions.github.io/projection/v2.0.0/schema.json",
+                "https://stac-extensions.github.io/embeddings/v0.0.1/schema.json"
+            ]
         )
 
         # Path relative to the final STAC directory
@@ -143,10 +155,9 @@ def process_directory(args):
 
         item.add_link(
             pystac.Link(
-                "derived-from",
-                f"https://stac.dataspace.copernicus.eu/v1/collections/sentinel-2-l2a/items/{item_id}",
-                "application/json",
-                "Base Sentinel-2-L2A image",
+                "emb:source-data",
+                f"https://{source_url}/collections/{source_collection}/items/{item_id}",
+                "application/json"
             )
         )
 
@@ -165,7 +176,7 @@ def process_directory(args):
         return {"status": "error", "message": f"Error in {input_dir}: {str(e)}"}
 
 
-def process_and_catalog(parent_input_dir, parent_output_dir, stac_out_dir):
+def process_and_catalog(parent_input_dir, parent_output_dir, stac_out_dir, collection_id):
     """
     Orchestrates the parallel processing of TIFFs and the creation of the STAC catalog.
     """
@@ -178,7 +189,7 @@ def process_and_catalog(parent_input_dir, parent_output_dir, stac_out_dir):
         if entry.is_dir():
             input_dir = entry.path
             output_file = os.path.join(parent_output_dir, f"{entry.name}.parquet")
-            tasks.append((input_dir, output_file, stac_out_dir, COLLECTION_ID))
+            tasks.append((input_dir, output_file, stac_out_dir, collection_id, 16))
 
     if not tasks:
         print(f"No subdirectories found in {parent_input_dir}")
@@ -225,9 +236,9 @@ def process_and_catalog(parent_input_dir, parent_output_dir, stac_out_dir):
     extent = pystac.Extent(spatial=spatial_extent, temporal=temporal_extent)
 
     collection = pystac.Collection(
-        id=COLLECTION_ID,
-        title="Sentinel-2-L2A TerraMind embeddings",
-        description="A STAC Collection of Sentinel-2-L2A embeddings, produced with the TerraMind Tokenizer.",
+        id=collection_id,
+        title=collection_id,
+        description="A STAC Collection of Sentinel embeddings, produced with the TerraMind Tokenizer.",
         stac_extensions=[
             "https://stac-extensions.github.io/embeddings/v0.0.1/schema.json",
             "https://stac-extensions.github.io/projection/v2.0.0/schema.json"
@@ -269,17 +280,22 @@ def process_and_catalog(parent_input_dir, parent_output_dir, stac_out_dir):
 if __name__ == "__main__":
     # --- Configuration ---
     # Directory containing subdirectories of TIFFs
-    RAW_DATA_DIR = "/dss/dsshome1/04/di97bis/e2s/maritime/new/03_interim_data/02_terramind_embeddings/02_S2_embeddings"
+    S2_RAW_DATA_DIR = "/dss/dsshome1/04/di97bis/e2s/maritime/new/03_interim_data/02_terramind_embeddings/02_S2_embeddings"
+    S2_OUT_DIR = "/dss/dsshome1/04/di97bis/e2s/maritime/99_preprocess/s2"
+    S2_PARQUETS_DIR = f"{S2_OUT_DIR}/pq"  # Directory to store the output GeoParquet files
+    S2_STAC_DIR = f"{S2_OUT_DIR}/stac"  # Directory to store the generated STAC Collection and Items
 
-    OUT_DIR = "/dss/dsshome1/04/di97bis/e2s/maritime/99_preprocess"
+    if os.path.exists(S2_OUT_DIR):
+        shutil.rmtree(S2_OUT_DIR)
 
-    # Directory to store the output GeoParquet files
-    PARQUETS_DIR = f"{OUT_DIR}/pq"
+    process_and_catalog(S2_RAW_DATA_DIR, S2_PARQUETS_DIR, S2_STAC_DIR, "TerraMind-Sentinel-2-tokenizer-embeddings")
 
-    # Directory to store the generated STAC Collection and Items
-    STAC_DIR = f"{OUT_DIR}/stac"
+    S1_RAW_DATA_DIR = "/dss/dsshome1/04/di97bis/e2s/maritime/new/03_interim_data/02_terramind_embeddings/01_S1_embeddings"
+    S1_OUT_DIR = "/dss/dsshome1/04/di97bis/e2s/maritime/99_preprocess/s1"
+    S1_PARQUETS_DIR = f"{S1_OUT_DIR}/pq"  # Directory to store the output GeoParquet files
+    S1_STAC_DIR = f"{S1_OUT_DIR}/stac"  # Directory to store the generated STAC Collection and Items
 
-    if os.path.exists(OUT_DIR):
-        shutil.rmtree(OUT_DIR)
+    if os.path.exists(S1_OUT_DIR):
+        shutil.rmtree(S1_OUT_DIR)
 
-    process_and_catalog(RAW_DATA_DIR, PARQUETS_DIR, STAC_DIR)
+    process_and_catalog(S1_RAW_DATA_DIR, S1_PARQUETS_DIR, S1_STAC_DIR, "TerraMind-Sentinel-1-tokenizer-embeddings")

@@ -269,7 +269,7 @@ def process_and_catalog(parent_input_dir, parent_output_dir, stac_out_dir):
 if __name__ == "__main__":
     # --- Configuration ---
     # Directory containing subdirectories of TIFFs
-    RAW_DATA_DIR = "/dss/dsshome1/04/di97bis/e2s/maritime/03_interim_data/02_terramind_embeddings/02_S2_embeddings"
+    RAW_DATA_DIR = "/dss/dsshome1/04/di97bis/e2s/maritime/new/03_interim_data/02_terramind_embeddings/02_S2_embeddings"
 
     OUT_DIR = "/dss/dsshome1/04/di97bis/e2s/maritime/99_preprocess"
 

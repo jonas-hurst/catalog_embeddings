@@ -5,12 +5,13 @@ import concurrent.futures
 from datetime import datetime, timezone
 import shutil
 
+from affine import Affine
 import rasterio
 import numpy as np
 import geopandas as gpd
 import pyarrow as pa
 import pyarrow.parquet as pq
-from shapely.geometry import box, mapping
+from shapely.geometry import box, mapping, Polygon
 import pystac
 
 COLLECTION_ID = "TerraMind-Sentinel-2-tokenizer-embeddings"
@@ -66,8 +67,18 @@ def process_directory(args):
                 # single copy: transpose + cast written directly into the output buffer
                 stacked[i] = np.transpose(a, (1, 2, 0))
 
+                # fix pixel size metadata and build footprint polygon
+                transform = src.transform * Affine.scale(16, 16)
+                width, height = src.width, src.height
+                footprint = Polygon([
+                    transform * (0, 0),
+                    transform * (width, 0),
+                    transform * (width, height),
+                    transform * (0, height),
+                ])
+
                 ids.append(os.path.basename(f))
-                geoms.append(box(*src.bounds))
+                geoms.append(footprint)
 
         # geometry-only GeoDataFrame: the embeddings never need to go through pandas
         gdf = gpd.GeoDataFrame({"ID": ids}, geometry=geoms, crs=native_crs)

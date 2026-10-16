@@ -292,7 +292,7 @@ if __name__ == "__main__":
     if os.path.exists(S2_OUT_DIR):
         shutil.rmtree(S2_OUT_DIR)
 
-    process_and_catalog(S2_RAW_DATA_DIR, S2_PARQUETS_DIR, S2_STAC_DIR, "TerraMind-Sentinel-2-tokenizer-embeddings")
+    process_and_catalog(S2_RAW_DATA_DIR, S2_PARQUETS_DIR, S2_STAC_DIR, "mediterranean_sentinel2_embeddings_terramind")
 
     S1_RAW_DATA_DIR = "/dss/dsshome1/04/di97bis/e2s/maritime/new/03_interim_data/02_terramind_embeddings/01_S1_embeddings"
     S1_OUT_DIR = "/dss/dsshome1/04/di97bis/e2s/maritime/99_preprocess/s1"
@@ -302,4 +302,4 @@ if __name__ == "__main__":
     if os.path.exists(S1_OUT_DIR):
         shutil.rmtree(S1_OUT_DIR)
 
-    process_and_catalog(S1_RAW_DATA_DIR, S1_PARQUETS_DIR, S1_STAC_DIR, "TerraMind-Sentinel-1-tokenizer-embeddings")
+    process_and_catalog(S1_RAW_DATA_DIR, S1_PARQUETS_DIR, S1_STAC_DIR, "mediterranean_sentinel1_embeddings_terramind")

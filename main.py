@@ -36,6 +36,8 @@ def process_directory(args):
 
     input_dir: str = args[0]
     output_file: str = args[1]
+    if output_file.endswith(".SAFE.parquet"):
+        output_file = output_file[:-13] + ".parquet"
     stac_out_dir: str = args[2]
     collection_id = args[3]
     px_scale_factor = args[4]
@@ -146,7 +148,7 @@ def process_directory(args):
         item.add_asset(
             "embeddings",
             pystac.Asset(
-                href=f"https://e2s.s3.eu-de.cloud-object-storage.appdomain.cloud/embeddings/maritime/{data_key}/{output_file}",
+                href=f"https://e2s.s3.eu-de.cloud-object-storage.appdomain.cloud/embeddings/maritime/{data_key}/{item_id}.parquet",
                 media_type="application/vnd.apache.parquet",
                 roles=["embeddings"],
                 title=f"TerraMind Embeddings",

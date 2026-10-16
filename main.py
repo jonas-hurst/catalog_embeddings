@@ -121,10 +121,14 @@ def process_directory(args):
             source_url = "stac.dataspace.copernicus.eu/v1"
             source_collection = "sentinel-2-l2a"
             stac_datetime = datetime.strptime(item_id.split("_")[2], "%Y%m%dT%H%M%S").replace(tzinfo=timezone.utc)
-        else:
-            source_url = "stac.terrabyte.lrz.de/public/api"
+            data_key = "sentinel_2_embeddings"
+        elif item_id.startswith("S1"):
+            source_url = None
             source_collection = "sentinel-1-grd"
             stac_datetime = datetime.strptime(item_id.split("_")[4], "%Y%m%dT%H%M%S").replace(tzinfo=timezone.utc)
+            data_key = "sentinel_1_embeddings"
+        else:
+            raise Exception(f"Item type {item_id} unsupported")
 
         item = pystac.Item(
             id=item_id,
@@ -139,13 +143,10 @@ def process_directory(args):
             ]
         )
 
-        # Path relative to the final STAC directory
-        rel_path = os.path.relpath(output_file, stac_out_dir)
-
         item.add_asset(
             "embeddings",
             pystac.Asset(
-                href=rel_path,
+                href=f"https://e2s.s3.eu-de.cloud-object-storage.appdomain.cloud/embeddings/maritime/{data_key}/{output_file}",
                 media_type="application/vnd.apache.parquet",
                 roles=["embeddings"],
                 title=f"TerraMind Embeddings",
@@ -153,13 +154,14 @@ def process_directory(args):
             )
         )
 
-        item.add_link(
-            pystac.Link(
-                "emb:source-data",
-                f"https://{source_url}/collections/{source_collection}/items/{item_id}",
-                "application/json"
+        if source_url is not None:
+            item.add_link(
+                pystac.Link(
+                    "emb:source-data",
+                    f"https://{source_url}/collections/{source_collection}/items/{item_id}",
+                    "application/json"
+                )
             )
-        )
 
         item.save_object(False, f"{stac_out_dir}/{item_id}.json")
 

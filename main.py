@@ -41,7 +41,7 @@ def process_directory(args):
     px_scale_factor = args[4]
     item_id = os.path.basename(input_dir)
     if item_id.endswith(".SAFE"):
-        item_id = item_id.strip(".SAFE")
+        item_id = item_id[:-5]  # remove .SAFE
     tif_files = sorted(glob.glob(os.path.join(input_dir, "*_embedding.tif")))
 
     if not tif_files:
@@ -123,7 +123,7 @@ def process_directory(args):
             stac_datetime = datetime.strptime(item_id.split("_")[2], "%Y%m%dT%H%M%S").replace(tzinfo=timezone.utc)
             data_key = "sentinel_2_embeddings"
         elif item_id.startswith("S1"):
-            source_url = None
+            source_url = "stac.terrabyte.lrz.de/public/api"
             source_collection = "sentinel-1-grd"
             stac_datetime = datetime.strptime(item_id.split("_")[4], "%Y%m%dT%H%M%S").replace(tzinfo=timezone.utc)
             data_key = "sentinel_1_embeddings"
@@ -154,14 +154,14 @@ def process_directory(args):
             )
         )
 
-        if source_url is not None:
-            item.add_link(
-                pystac.Link(
-                    "emb:source-data",
-                    f"https://{source_url}/collections/{source_collection}/items/{item_id}",
-                    "application/json"
-                )
+
+        item.add_link(
+            pystac.Link(
+                "emb:source-data",
+                f"https://{source_url}/collections/{source_collection}/items/{item_id}",
+                "application/json"
             )
+        )
 
         item.save_object(False, f"{stac_out_dir}/{item_id}.json")
 
